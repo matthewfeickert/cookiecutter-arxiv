@@ -1,101 +1,128 @@
-.PHONY: clean clean-build clean-pyc clean-test coverage dist docs help install lint lint/flake8
-        {%- if cookiecutter.use_black == 'y' %} lint/black{% endif %}
+.PHONY: clean clean_figures default figures text document arXiv help
 .DEFAULT_GOAL := help
 
-define BROWSER_PYSCRIPT
-import os, webbrowser, sys
+FILENAME = chep_2023_proceedings
 
-from urllib.request import pathname2url
+date = $(shell date +%Y-%m-%d)
+output_file = draft_$(date).pdf
 
-webbrowser.open("file://" + pathname2url(os.path.abspath(sys.argv[1])))
-endef
-export BROWSER_PYSCRIPT
+figure_src = $(wildcard figures/*.tex figures/*/*.tex)
+figure_list = $(figure_src:.tex=.pdf)
 
-define PRINT_HELP_PYSCRIPT
-import re, sys
+# LATEX = pdflatex
+# LATEX = xelatex
+LATEX = lualatex
 
-for line in sys.stdin:
-	match = re.match(r'^([a-zA-Z_-]+):.*?## (.*)$$', line)
-	if match:
-		target, help = match.groups()
-		print("%-20s %s" % (target, help))
-endef
-export PRINT_HELP_PYSCRIPT
+BIBTEX = bibtex
+# BIBTEX = biber
 
-BROWSER := python -c "$$BROWSER_PYSCRIPT"
+default: document copy_draft
 
-help:
-	@python -c "$$PRINT_HELP_PYSCRIPT" < $(MAKEFILE_LIST)
+all: default
 
-clean: clean-build clean-pyc clean-test ## remove all build, test, coverage and Python artifacts
+figures: $(figure_list)
 
-clean-build: ## remove build artifacts
-	rm -fr build/
-	rm -fr dist/
-	rm -fr .eggs/
-	find . -name '*.egg-info' -exec rm -fr {} +
-	find . -name '*.egg' -exec rm -f {} +
+# Target assumes figure source is in same directory as expected figure path
+figures/%.pdf: figures/%.tex
+	latexmk -$(LATEX) -interaction=nonstopmode -halt-on-error $(basename $@)
+	mv $(notdir $(basename $@)).pdf $(basename $@).pdf
+	rm $(notdir $(basename $@)).*
 
-clean-pyc: ## remove Python file artifacts
-	find . -name '*.pyc' -exec rm -f {} +
-	find . -name '*.pyo' -exec rm -f {} +
-	find . -name '*~' -exec rm -f {} +
-	find . -name '__pycache__' -exec rm -fr {} +
+text:
+	latexmk -$(LATEX) -logfilewarnings -halt-on-error -shell-escape $(FILENAME)
 
-clean-test: ## remove test and coverage artifacts
-	rm -fr .tox/
-	rm -f .coverage
-	rm -fr htmlcov/
-	rm -fr .pytest_cache
+document: figures text
 
-lint/flake8: ## check style with flake8
-	flake8 {{ cookiecutter.project_slug }} tests
+copy_draft:
+	rsync $(FILENAME).pdf $(output_file)
 
-{%- if cookiecutter.use_black == 'y' %}
-lint/black: ## check style with black
-	black --check {{ cookiecutter.project_slug }} tests
-{%- endif %}
+clean:
+	rm -f *.aux *.bbl *.blg *.dvi *.idx *.lof *.log *.lot *.toc \
+		*.xdy *.nav *.out *.snm *.vrb *.mp \
+		*.synctex.gz *.brf *.fls *.fdb_latexmk \
+		*.glg *.gls *.glo *.ist *.alg *.acr *.acn *.pyg
 
-lint: lint/flake8{%- if cookiecutter.use_black == 'y' %} lint/black{%- endif %} ## check style
+clean_figures:
+	rm -f $(figure_list)
 
-test: ## run tests quickly with the default Python
-{%- if cookiecutter.use_pytest == 'y' %}
-	pytest
-{%- else %}
-	python setup.py test
-{%- endif %}
+clean_drafts:
+	rm -f draft_*.pdf
 
-test-all: ## run tests on every Python version with tox
-	tox
+realclean: clean clean_figures
+	rm -f *.ps *.pdf
 
-coverage: ## check code coverage quickly with the default Python
-{%- if cookiecutter.use_pytest == 'y' %}
-	coverage run --source {{ cookiecutter.project_slug }} -m pytest
-{%- else %}
-	coverage run --source {{ cookiecutter.project_slug }} setup.py test
-{%- endif %}
-	coverage report -m
-	coverage html
-	$(BROWSER) htmlcov/index.html
+lint:
+	grep -E --color=always -r -i --include=\*.tex --include=\*.bib "(\b[a-zA-Z]+) \1\b" || true
 
-docs: ## generate Sphinx HTML documentation, including API docs
-	rm -f docs/{{ cookiecutter.project_slug }}.rst
-	rm -f docs/modules.rst
-	sphinx-apidoc -o docs/ {{ cookiecutter.project_slug }}
-	$(MAKE) -C docs clean
-	$(MAKE) -C docs html
-	$(BROWSER) docs/_build/html/index.html
+final:
+	if [ -f *.aux ]; then \
+		$(MAKE) clean; \
+	fi
+	$(MAKE) figures
+	$(MAKE) abstract
+	$(MAKE) text
+	$(MAKE) clean
+	$(MAKE) lint
 
-servedocs: docs ## compile the docs watching for changes
-	watchmedo shell-command -p '*.rst' -c '$(MAKE) -C docs html' -R -D .
+arXiv: deep_clean text
+	# Get a minted cache
+	sed -i.bak 's/cache=false/cache=true/' latex/packages.tex
+	$(MAKE) text
 
-release: dist ## package and upload a release
-	twine upload dist/*
+	mkdir submit_to_arXiv
+	cp $(FILENAME).tex submit_to_arXiv
+	if [ -f $(FILENAME).bbl ]; then cp $(FILENAME).bbl submit_to_arXiv/ms.bbl; fi
+	cp Makefile submit_to_arXiv
 
-dist: clean ## builds source and wheel package
-	python setup.py sdist
-	python setup.py bdist_wheel
-	ls -l dist
+	if [ -d src ]; then cp -r src submit_to_arXiv; fi
+	if [ -d latex ]; then cp -r latex submit_to_arXiv; fi
+	if [ -d figures ]; then cp -r figures submit_to_arXiv; fi
+	if [ -f *.sty ]; then cp *.sty submit_to_arXiv; fi
+	# .bst files are not used, but copy over to inlcude all src files for posterity
+	if [ -f *.bst ]; then cp *.bst submit_to_arXiv; fi
+	# https://arxiv.org/help/00README
+	if [ -f 00README.XXX ]; then cp 00README.XXX submit_to_arXiv; fi
 
-install: clean ## install the package to the active Python's site-packages
-	python setup.py install
+	# Use cache for minted
+	# c.f. https://github.com/gpoore/minted/issues/113#issuecomment-223451550
+	mv _minted-$(FILENAME) submit_to_arXiv/_minted-ms
+	sed -i.bak 's/finalizecache/frozencache/' submit_to_arXiv/latex/packages.tex
+
+	mv submit_to_arXiv/$(FILENAME).tex submit_to_arXiv/ms.tex
+
+	# -i.bak is used for compatability across GNU and BSD/macOS sed
+	# Change the FILENAME to ms while ignoring commented lines
+	sed -i.bak '/^ *#/d;s/#.*//;0,/FILENAME/s/.*/FILENAME = ms/' submit_to_arXiv/Makefile
+
+	# Remove hyperref for arXiv
+	# N.B. Need to manually set the file to edit for the time being
+	# N.B. Currently fixed by 00README.XXX
+
+	find submit_to_arXiv/ -name "*.bak" -type f -delete
+
+	# arXiv requires .bib files to be compiled to .bbl files and will remove any .bib files
+	find submit_to_arXiv/ -name "*.bib" -type f -delete
+
+	tar -zcvf submit_to_arXiv.tar.gz submit_to_arXiv/
+	rm -rf submit_to_arXiv
+	$(MAKE) realclean
+
+	# Restore original packages
+	if [ -f latex/packages.tex.bak ];then \
+		mv latex/packages.tex.bak latex/packages.tex; \
+	fi
+
+list_arXiv:
+	tar -tvf submit_to_arXiv.tar.gz
+
+test_arXiv:
+	tar -xzvf submit_to_arXiv.tar.gz
+	cd submit_to_arXiv && make
+
+clean_arXiv:
+	if [ -f submit_to_arXiv.tar.gz ];then \
+		rm submit_to_arXiv.tar.gz; \
+	fi
+
+deep_clean: realclean clean_arXiv
+	rm -rf submit_to_arXiv
